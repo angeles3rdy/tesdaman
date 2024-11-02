@@ -1,16 +1,18 @@
 package layout.menu;
 
+//changes
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.LocalDate;
-import java.util.Calendar;
 import java.util.Scanner;
 
 import config.DBConfig;
 import layout.enums.DateEnum;
 import layout.interfaces.IInventory;
 import layout.product_structure.Products;
+import layout.product_structure.User;
 import layout.textgenerator.AsciiGenerator;
 
 public class InventoryMenu implements IInventory {
@@ -20,6 +22,7 @@ public class InventoryMenu implements IInventory {
     Scanner sc;
     AsciiGenerator textToAscii;
     Products prod;
+    User user;
     DateEnum dates;
 
     public InventoryMenu() {
@@ -28,6 +31,7 @@ public class InventoryMenu implements IInventory {
         conn = db.getConnection();
         textToAscii = new AsciiGenerator();
         prod = new Products();
+        user = new User();
     }
 
     public void clearScreen() {
@@ -51,7 +55,7 @@ public class InventoryMenu implements IInventory {
         char userInput;
         boolean isValid = false;
 
-        clearScreen();
+        // clearScreen();
         System.out.println("█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗");
         System.out.println("");
         System.out.println("\t██╗    ██╗███████╗██╗      ██████╗ ██████╗ ███╗   ███╗███████╗");
@@ -75,10 +79,12 @@ public class InventoryMenu implements IInventory {
             switch (userInput) {
                 case 'A':
                     isValid = true;
+                    user.setRole("admin");
                     clearScreen();
                     adminLogin();
                     break;
                 case 'S':
+                    user.setRole("staff");
                     isValid = true;
 
                     break;
@@ -120,7 +126,15 @@ public class InventoryMenu implements IInventory {
             }
             int totalPages = (int) Math.ceil(totalProducts / (double) limit); // divide product count to limit
 
-            productsQuery = conn.prepareStatement("SELECT * FROM products LIMIT ? OFFSET ?");
+            // Modified products query to include join and fetch the necessary fields
+            productsQuery = conn.prepareStatement(
+                    "SELECT p.product_id, p.product_name, b.brand AS product_brand, c.category AS product_category, " +
+                            "p.product_expiry, p.product_quantity, " +
+                            "DATEDIFF(p.product_expiry, CURDATE()) / 30 AS months_left, p.status " +
+                            "FROM products p " +
+                            "JOIN categories c ON p.category_id = c.categ_id " +
+                            "JOIN brands b ON p.brand_id = b.brand_id " +
+                            "LIMIT ? OFFSET ?");
             productsQuery.setInt(1, limit);
             productsQuery.setInt(2, offset);
             productsSnapshot = productsQuery.executeQuery();
@@ -128,23 +142,51 @@ public class InventoryMenu implements IInventory {
             textToAscii.printDisplay("\t\t\t\t", "PRODUCTS");
 
             if (!productsSnapshot.isBeforeFirst()) {
-                System.out.println("\t\t\tNo products found.");
-                // adminMenu();
+                clearScreen();
+                System.out.println(
+                        "==================================== No products found. Going back to menu. ====================================\n");
+                System.out.println(
+                        "============================================ Notify staff to restock ===========================================\n");
+                boolean actionValid = false;
+
+                do {
+                    System.out.println("\t\t\t\t [ 1 ] Notify Staff");
+                    System.out.println("\t\t\t\t [ 0 ] Go back");
+                    System.out.print("\t\t\t\t Choice: ");
+
+                    String input = sc.nextLine();
+
+                    switch (input) {
+                        case "1":
+                            clearScreen();
+                            notifyStaff();
+                            actionValid = true;
+                            break;
+                        case "0":
+                            System.out.println("Going back...");
+                            adminMenu();
+                            actionValid = true;
+                            break;
+                        default:
+                            System.out.println("\t\t\t\t Invalid choice. Please select again.");
+                            break;
+                    }
+                } while (!actionValid);
             } else {
-                System.out.printf("%5s %20s %30s %20s %20s %20s %20s %14s%n", "ID", "CATEGORY", "PRODUCT NAME",
+                System.out.printf("\n%5s %20s %30s %20s %20s %20s %20s %14s%n", "ID", "CATEGORY", "PRODUCT NAME",
                         "PRODUCT BRAND", "EXPIRY", "QUANTITY", "MONTHS LEFT", "STATUS");
                 System.out.println(
                         "-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
 
                 while (productsSnapshot.next()) {
                     System.out.printf("%5s %20s %24s %22s %26s %15s %18s %18s%n",
-                            productsSnapshot.getInt("productId"),
-                            productsSnapshot.getString("productCategory"),
-                            productsSnapshot.getString("productName"),
-                            productsSnapshot.getString("productBrand"),
-                            productsSnapshot.getString("productExpiry"),
-                            productsSnapshot.getString("productQuantity"),
-                            productsSnapshot.getInt("monthsLeft"),
+                            productsSnapshot.getInt("product_id"),
+                            productsSnapshot.getString("product_category"),
+                            productsSnapshot.getString("product_name"),
+                            productsSnapshot.getString("product_brand"),
+                            productsSnapshot.getString("product_expiry"),
+                            productsSnapshot.getInt("product_quantity"),
+                            productsSnapshot.getInt("months_left"),
                             productsSnapshot.getString("status"));
                     System.out.println(
                             "-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------");
@@ -161,7 +203,7 @@ public class InventoryMenu implements IInventory {
                 System.out.println("\t\t\t[0] Go Back");
 
                 do {
-
+                    // Handling user choice for pagination or actions can be implemented here
                 } while (!isValid);
             }
         } catch (Exception e) {
@@ -171,17 +213,143 @@ public class InventoryMenu implements IInventory {
 
     @Override
     public void addProduct() {
+
+    }
+
+    @Override
+    public void displayAddProductPrompt() {
+
+        String selectedCategory;
+        char selectedCategoryFirstChar;
+        String productName;
+        char choice;
+
+        boolean isValid = false, // for checking if product length is valid
+                isValid2 = false; // for checking if user input is Y or N
+
+        PreparedStatement categoriesQuery;
+        ResultSet categoriesSnapshot;
+
+        PreparedStatement isCategoryExistQuery;
+        ResultSet isCategoryExistSnapshot;
+
+        PreparedStatement insertToFixedProdsQuery;
+
         try {
+            textToAscii.printDisplay("", "AVAILABLE CATEGORIES");
+
+            categoriesQuery = conn.prepareStatement("SELECT * FROM categories");
+            categoriesSnapshot = categoriesQuery.executeQuery();
+
+            while (categoriesSnapshot.next()) {
+                System.out.println(
+                        "\t\t\t\t\t[ " + categoriesSnapshot.getInt("categ_id") + " ] "
+                                + categoriesSnapshot.getString("category"));
+
+            }
+            categoriesQuery.close();
+            System.out.println(
+                    "\t\t\t\t\t[ 0 ] Go Back");
+
+            System.out.print("\t\t\t\tAdd products for category: ");
+            selectedCategory = sc.nextLine();
+            selectedCategoryFirstChar = selectedCategory.charAt(0);
+
+            if (selectedCategory.matches("\\d+")) { // valid input
+
+                isCategoryExistQuery = conn.prepareStatement("SELECT * FROM categories WHERE categ_id = ?");
+                isCategoryExistQuery.setInt(1, Integer.parseInt(selectedCategory));
+                isCategoryExistSnapshot = isCategoryExistQuery.executeQuery();
+
+                if (selectedCategoryFirstChar == '0') {
+                    isValid = true;
+                    clearScreen();
+                    adminMenu();
+                } else {
+                    if (!isCategoryExistSnapshot.next()) { // category invalid
+                        clearScreen();
+                        System.out.println(
+                                "\t===========================CATEGORY NOT FOUND===========================\n");
+                        displayAddProductPrompt();
+                    } else {
+                        clearScreen();
+                        prod.setProductCategory(isCategoryExistSnapshot.getString("category"));
+                        prod.setProducDbColumn("fixed_" + prod.getProductCategory().toLowerCase());
+
+                        do {
+
+                            textToAscii.printDisplay("\t\t", "ADDING PRODUCTS");
+
+                            System.out
+                                    .println("\t\tFor system integrity, only one product can be added at a time.");
+                            System.out.println("\t\t\t\tType 0 to go back");
+                            System.out.print("\t\t\t\tEnter product name: ");
+
+                            productName = sc.nextLine().toUpperCase();
+
+                            if (productName.charAt(0) == '0') {
+                                clearScreen();
+                                System.out.println(
+                                        "\t================================ACTION CANCELLED================================");
+
+                                adminMenu();
+                                return;
+                            }
+
+                            if (productName.length() < 4) {
+                                isValid = false;
+                                clearScreen();
+                                System.out
+                                        .println("\t\t========Product name must have atleast 4 characters!========\n");
+                            } else {
+                                isValid = true;
+                                prod.setProductName(productName);
+
+                                do {
+                                    System.out.print("\t\t\t\tAdd " + prod.getProductName() + " to inventory? [Y/N]: ");
+                                    choice = sc.nextLine().toUpperCase().charAt(0);
+
+                                    switch (choice) {
+                                        case 'Y':
+                                            isValid2 = true;
+                                            insertToFixedProdsQuery = conn.prepareStatement(
+                                                    "INSERT INTO " + prod.getProducDbColumn() + " (item) VALUES (?)");
+                                            insertToFixedProdsQuery.setString(1, productName);
+                                            insertToFixedProdsQuery.executeUpdate();
+                                            Thread.sleep(1000);
+                                            clearScreen();
+                                            System.out.println(
+                                                    "\t================================PRODUCT ADDED SUCCESSFULLY================================");
+                                            adminMenu();
+                                            break;
+                                        case 'N':
+                                            isValid2 = true;
+
+                                            break;
+
+                                        default:
+                                            isValid2 = false;
+                                            clearScreen();
+                                            System.out.println(
+                                                    "\t================================INVALID INPUT================================");
+                                            break;
+                                    }
+                                } while (!isValid2);
+
+                            }
+                        } while (!isValid);
+                    }
+                }
+            }
 
         } catch (Exception e) {
-            // TODO: handle exception
+
         }
     }
 
     @Override
     public void staffLogin() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'staffLogin'");
+
     }
 
     @Override
@@ -191,19 +359,19 @@ public class InventoryMenu implements IInventory {
         String usernameInp, passwordInp;
         boolean isValid = false;
 
-        System.out.println("█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗");
-        System.out.println("");
-        System.out.println("\t\t █████╗ ██████╗ ███╗   ███╗██╗███╗   ██╗");
-        System.out.println("\t\t██╔══██╗██╔══██╗████╗ ████║██║████╗  ██║");
-        System.out.println("\t\t███████║██║  ██║██╔████╔██║██║██╔██╗ ██║");
-        System.out.println("\t\t██╔══██║██║  ██║██║╚██╔╝██║██║██║╚██╗██║");
-        System.out.println("\t\t██║  ██║██████╔╝██║ ╚═╝ ██║██║██║ ╚████║");
-        System.out.println("\t\t╚═╝  ╚═╝╚═════╝ ╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝");
-        System.out.println("");
-        System.out.println("█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗");
-
         try {
             do {
+                System.out.println("█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗");
+                System.out.println("");
+                System.out.println("\t\t █████╗ ██████╗ ███╗   ███╗██╗███╗   ██╗");
+                System.out.println("\t\t██╔══██╗██╔══██╗████╗ ████║██║████╗  ██║");
+                System.out.println("\t\t███████║██║  ██║██╔████╔██║██║██╔██╗ ██║");
+                System.out.println("\t\t██╔══██║██║  ██║██║╚██╔╝██║██║██║╚██╗██║");
+                System.out.println("\t\t██║  ██║██████╔╝██║ ╚═╝ ██║██║██║ ╚████║");
+                System.out.println("\t\t╚═╝  ╚═╝╚═════╝ ╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝");
+                System.out.println("");
+                System.out.println("█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗█████╗");
+
                 System.out.println("Enter 0 to go back");
                 System.out.print("\t\t\tEnter username: ");
                 usernameInp = sc.nextLine();
@@ -227,13 +395,16 @@ public class InventoryMenu implements IInventory {
 
                 checkAccountSnapshot = checkAccountQuery.executeQuery();
 
-                if (checkAccountSnapshot.next()) {
+                if (checkAccountSnapshot.next()) { // may account
                     isValid = true;
+                    user.setUserId(checkAccountSnapshot.getInt("id"));
                     clearScreen();
+                    adminMenu();
                 } else {
                     isValid = false;
                     clearScreen();
-                    System.out.println("Invalid credentials!");
+                    System.out.println(
+                            "\t================================Invalid Credentials! Try again.================================\n");
                 }
 
             } while (!isValid);
@@ -254,16 +425,37 @@ public class InventoryMenu implements IInventory {
         int doesExpireConverted;
         boolean isValid = false;
 
+        PreparedStatement insertCategQuery;
+        PreparedStatement createFixedTableQuery;
+        PreparedStatement checkCategQuery;
+        ResultSet resultSet;
+
         try {
-            PreparedStatement insertCategQuery;
-            PreparedStatement createFixedTableQuery;
             textToAscii.printDisplay("\t\t", "ADD CATEGORIES");
             System.out.println("\t\t\tType 0 to go back");
             System.out.print("\t\t\tEnter new category: ");
+
             category = sc.nextLine().toUpperCase();
             firstCharacter = category.charAt(0);
 
-            System.out.println("\t\t\tDoes items in this category expires? [Y/N]: ");
+            if (firstCharacter == '0') {
+                clearScreen();
+                adminMenu();
+                return;
+            }
+
+            checkCategQuery = conn.prepareStatement("SELECT category FROM categories WHERE UPPER(category) = ?");
+            checkCategQuery.setString(1, category);
+            resultSet = checkCategQuery.executeQuery();
+
+            if (resultSet.next()) {
+                clearScreen();
+                System.out.println("\t\t========Category already exists!========\n");
+                addCategories();
+                return;
+            }
+
+            System.out.println("\t\t\tDoes items in this category expire? [Y/N]: ");
             System.out.print("\t\t\t(THIS CANNOT BE CHANGED): ");
             doesExpire = sc.nextLine().toUpperCase().charAt(0);
             firstCharacter = doesExpire;
@@ -287,14 +479,17 @@ public class InventoryMenu implements IInventory {
                             insertCategQuery.setString(1, category);
                             insertCategQuery.setInt(2, doesExpireConverted);
                             insertCategQuery.executeUpdate();
+
                             createFixedTableQuery = conn.prepareStatement("CREATE TABLE fixed_" + category.toLowerCase()
                                     + "(id INT AUTO_INCREMENT PRIMARY KEY, item VARCHAR(255));");
                             createFixedTableQuery.executeUpdate();
+
                             clearScreen();
                             System.out.println(
                                     "\t===========================CATEGORY ADDED SUCCESSFULLY===========================\n");
                             adminMenu();
                             break;
+
                         case 'N':
                             isValid = true;
                             clearScreen();
@@ -305,7 +500,9 @@ public class InventoryMenu implements IInventory {
 
                         default:
                             isValid = false;
-
+                            clearScreen();
+                            System.out.println(
+                                    "\t================================Invalid Input!================================\n");
                             break;
                     }
                 } while (!isValid);
@@ -317,32 +514,174 @@ public class InventoryMenu implements IInventory {
             System.out.println(
                     "\t================================AN ERROR OCCURED================================\n");
             System.out.println(e.getMessage());
-            // adminMenu();
         }
     }
 
     @Override
     public void addBrand() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'addBrand'");
+
+        PreparedStatement insertToBrandQuery;
+        PreparedStatement checkCategById;
+        PreparedStatement checkCategoriesQuery;
+        ResultSet resultSet;
+
+        char choice; // Y or N
+        String choice2; // SELECTED CATEGORY ID
+        String productBrand;
+        boolean isValid = false, isValid2 = false; // Validations
+
+        try {
+
+            try {
+                checkCategoriesQuery = conn.prepareStatement("SELECT * FROM categories"); // check if category exists
+                resultSet = checkCategoriesQuery.executeQuery();
+
+                if (!resultSet.isBeforeFirst()) {
+                    clearScreen();
+                    System.out.println("\t\t========No categories available. Please add categories first!========\n");
+                    adminMenu();
+                    return;
+                }
+            } catch (Exception e) {
+                System.out.println("Error retrieving categories: " + e.getMessage());
+                return;
+            }
+
+            do {
+                textToAscii.printDisplay("\t\t\t   ", "ADD BRAND");
+
+                System.out.println("\n\t\t\t\tType 0 to go back ");
+                System.out.print("\t\t\t\tEnter product brand: ");
+                productBrand = sc.nextLine().toUpperCase();
+
+                if (productBrand.charAt(0) == '0') {
+                    clearScreen();
+                    adminMenu();
+                    return;
+                }
+
+                if (productBrand.length() < 4) {
+                    isValid = false;
+                    clearScreen();
+                    System.out.println("\t\t========Product name must have at least 4 characters!========\n");
+                } else {
+                    prod.setProductBrand(productBrand);
+                    isValid = true;
+
+                    System.out.println("\n\t\t     Appropriate category not found? Type [C] to add new.");
+                    System.out
+                            .println("\n\t\t     Select appropriate category for the brand: " + prod.getProductBrand());
+
+                    try {
+                        while (resultSet.next()) {
+                            System.out.println("\t\t\t\t\t[ " + resultSet.getInt("categ_id") + " ] "
+                                    + resultSet.getString("category"));
+                        }
+                    } catch (Exception e) {
+                        System.out.println("Error displaying categories: " + e.getMessage());
+                        return;
+                    }
+
+                    System.out.println("\t\t\t\t\t[ 0 ] Go Back");
+                    System.out.print("\t\t\t\tChoice: ");
+                    choice2 = sc.nextLine();
+
+                    if (choice2.equalsIgnoreCase("C")) {
+                        clearScreen();
+                        System.out.println(
+                                "\t===========================GOING BACK WILL PROCEED TO MAIN MENU===========================\n");
+                        addCategories();
+                        return;
+                    }
+
+                    if (choice2.charAt(0) == '0') {
+                        clearScreen();
+                        System.out.println(
+                                "\t================================ACTION CANCELLED================================\n");
+                        adminMenu();
+                        return;
+                    }
+
+                    // Verify category ID
+                    try {
+                        checkCategById = conn.prepareStatement("SELECT * FROM categories WHERE categ_id = ?");
+                        checkCategById.setInt(1, Integer.parseInt(choice2));
+                        ResultSet categoryResult = checkCategById.executeQuery();
+
+                        if (!categoryResult.next()) {
+                            clearScreen();
+                            System.out.println("\t\t========Invalid category ID!========\n");
+                            isValid = false; // Restart the process
+                        } else {
+                            do {
+                                System.out.print("\t\t\t\tAdd brand: " + prod.getProductBrand() + " to category "
+                                        + categoryResult.getString("category") + "? [Y/N]: ");
+                                choice = sc.nextLine().toUpperCase().charAt(0);
+
+                                switch (choice) {
+                                    case 'Y':
+                                        isValid2 = true;
+                                        clearScreen();
+
+                                        // Insert the brand into the brands table
+                                        try {
+                                            insertToBrandQuery = conn.prepareStatement(
+                                                    "INSERT INTO brands (brand, category_id) VALUES (?, ?)");
+                                            insertToBrandQuery.setString(1, productBrand);
+                                            insertToBrandQuery.setInt(2, Integer.parseInt(choice2));
+                                            insertToBrandQuery.executeUpdate();
+
+                                            System.out.println(
+                                                    "\t===========================BRAND ADDED SUCCESSFULLY===========================\n");
+                                            adminMenu();
+                                        } catch (Exception e) {
+                                            System.out.println("Error adding brand: " + e.getMessage());
+                                        }
+                                        break;
+
+                                    case 'N':
+                                        isValid2 = true;
+                                        clearScreen();
+                                        System.out.println(
+                                                "\t================================ACTION CANCELLED================================\n");
+                                        addBrand();
+                                        break;
+
+                                    default:
+                                        isValid2 = false;
+                                        clearScreen();
+                                        System.out.println(
+                                                "\t================================Invalid Input!================================\n");
+                                        break;
+                                }
+                            } while (!isValid2);
+                        }
+                    } catch (Exception e) {
+                        System.out.println("Error validating category ID: " + e.getMessage());
+                    }
+                }
+            } while (!isValid);
+
+        } catch (Exception e) {
+            System.out.println("An unexpected error occurred: " + e.getMessage());
+            clearScreen();
+            System.out.println("\t================================AN ERROR OCCURRED================================\n");
+        }
     }
 
     @Override
     public void viewItemByCategory() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'viewItemByCategory'");
+
     }
 
     @Override
     public void viewCriticalStocks() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'viewCriticalStocks'");
+
     }
 
     @Override
     public void viewNearExpiry() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'viewNearExpiry'");
+
     }
 
     @Override
@@ -352,7 +691,6 @@ public class InventoryMenu implements IInventory {
         String chosenCategory; // when there are categories
         char firstCharacter;
         boolean isValid = false;
-        int count = 0;
 
         PreparedStatement categoriesQuery;
         ResultSet categoriesSnapshot;
@@ -401,9 +739,9 @@ public class InventoryMenu implements IInventory {
 
                 while (categoriesSnapshot.next()) {
                     System.out.println(
-                            "\t\t\t\t\t[ " + (count + 1) + " ] " + categoriesSnapshot.getString("category"));
+                            "\t\t\t\t\t[ " + categoriesSnapshot.getInt("categ_id") + " ] "
+                                    + categoriesSnapshot.getString("category"));
 
-                    count++;
                 }
                 System.out.println(
                         "\t\t\t\t\t[ 0 ] Go Back");
@@ -415,7 +753,7 @@ public class InventoryMenu implements IInventory {
                 if (chosenCategory.matches("\\d+")) {
                     isValid = true;
 
-                    checkIfCategoryPresent = conn.prepareStatement("SELECT * FROM categories WHERE id = ?");
+                    checkIfCategoryPresent = conn.prepareStatement("SELECT * FROM categories WHERE categ_id = ?");
                     checkIfCategoryPresent.setInt(1, Integer.parseInt(chosenCategory));
                     checkIfCategoryPresentSnapshot = checkIfCategoryPresent.executeQuery();
 
@@ -424,12 +762,15 @@ public class InventoryMenu implements IInventory {
                         clearScreen();
                         adminMenu();
                     } else {
+
                         if (!checkIfCategoryPresentSnapshot.next()) {
+
                             isValid = true;
                             clearScreen();
                             System.out.println(
                                     "\t================================CATEGORY NOT FOUND================================\n");
                             displayCategories();
+
                         } else {
                             isValid = true;
                             prod.setProductCategory(checkIfCategoryPresentSnapshot.getString("category")); // category
@@ -557,10 +898,12 @@ public class InventoryMenu implements IInventory {
             do {
                 System.out.println("\t\t\tChoose an option:");
                 System.out.println("\t\t\t[1] Show Products");
-                System.out.println("\t\t\t[2] Add Products");
-                System.out.println("\t\t\t[3] Manage Staffs");
-                System.out.println("\t\t\t[4] My Account");
-                System.out.println("\t\t\t[5] Logout");
+                System.out.println("\t\t\t[2] Add Initial Products");
+                System.out.println("\t\t\t[3] Add Categories");
+                System.out.println("\t\t\t[4] Add Brands");
+                System.out.println("\t\t\t[5] Manage Staffs");
+                System.out.println("\t\t\t[6] My Account");
+                System.out.println("\t\t\t[7] Logout");
 
                 System.out.print("\t\t\tChoice: ");
                 choice = sc.nextLine().charAt(0);
@@ -569,23 +912,34 @@ public class InventoryMenu implements IInventory {
                     case '1':
                         isValid = true;
                         clearScreen();
+                        viewInventory(1);
                         break;
                     case '2':
                         isValid = true;
                         clearScreen();
-                        displayCategories();
+                        displayAddProductPrompt();
                         break;
                     case '3':
                         isValid = true;
                         clearScreen();
-
+                        addCategories();
                         break;
                     case '4':
                         isValid = true;
                         clearScreen();
-
+                        addBrand();
                         break;
                     case '5':
+                        isValid = true;
+                        clearScreen();
+                        manageStaff();
+                        break;
+                    case '6':
+                        isValid = true;
+                        clearScreen();
+
+                        break;
+                    case '7':
                         isValid = true;
                         clearScreen();
                         break;
@@ -736,6 +1090,7 @@ public class InventoryMenu implements IInventory {
         String month, day, year;
         int parsedMonth, parsedDay, parsedYear;
         int currentYear = LocalDate.now().getYear();
+
         char firstCharacter;
 
         try {
@@ -832,7 +1187,7 @@ public class InventoryMenu implements IInventory {
                         System.out.println("\t\t\tPlease enter a valid number for the day.");
                     }
                 }
-                
+
                 prod.setProductExpiry(parsedMonth + "-" + parsedDay + "-" + parsedYear);
                 prod.setProductExpiry(prod.getProductExpiry());
 
@@ -848,10 +1203,10 @@ public class InventoryMenu implements IInventory {
 
         } catch (Exception e) {
             clearScreen();
-            System.out.println(e.getMessage());
+            // System.out.println(e.getMessage());
             System.out.println(
-                    "\t================================AN ERROR OCCURED================================\n");
-            displayBrands();
+                    "\t================================PROCEED AGAIN================================\n");
+            displayProductExpiryPrompt();
         }
     }
 
@@ -909,8 +1264,392 @@ public class InventoryMenu implements IInventory {
 
     @Override
     public void displayConfirmation() {
-        // TODO Auto-generated method stub
-        throw new UnsupportedOperationException("Unimplemented method 'displayConfirmation'");
+
     }
 
+    @Override
+    public void notifyStaff() {
+        try {
+            PreparedStatement notifyStaff = conn
+                    .prepareStatement("INSERT INTO notif (notifier, type) VALUES ('admin', 'restock');");
+            notifyStaff.executeUpdate();
+
+            System.out.println(
+                    "\t\t\t\t\t\t==========================NOTIFIED STAFF SUCCESSFULLY==========================\n\n");
+
+            adminMenu();
+            // showCriticalProducts();
+        } catch (Exception e) {
+            System.out.println(e.getMessage());
+            return;
+        }
+    }
+
+    @Override
+    public void displayNotifications() {
+
+    }
+
+    @Override
+    public void displayProductsToRestock() {
+
+    }
+
+    @Override
+    public void displayExpiredProducts() {
+
+    }
+
+    @Override
+    public void displayLowStockProducts() {
+
+    }
+
+    @Override
+    public void notifyAdmin() {
+        try {
+            PreparedStatement notifyStaff = conn
+                    .prepareStatement("INSERT INTO notif (notifier, type) VALUES ('staff', 'done');");
+            notifyStaff.executeUpdate();
+
+            System.out.println(
+                    "\t\t\t\t\t\t==========================NOTIFIED ADMIN SUCCESSFULLY==========================\n\n");
+
+            staffMenu();
+            // showCriticalProducts();
+        } catch (Exception e) {
+            System.out.println(e.getMessage());
+            return;
+        }
+    }
+
+    @Override
+    public void myAccount(String role) {
+        try {
+            int userId = user.getUserId();
+            boolean isValid = false;
+
+            textToAscii.printDisplay("\t\t", "MANAGE ACCOUNT");
+
+            if (role.equals("admin") || role.equals("staff")) {
+                do {
+                    System.out.println("\t\t\t\t[ 1 ] Change password");
+                    System.out.println("\t\t\t\t[ 0 ] Go back");
+                    System.out.print("\t\t\tSelect an option: ");
+                    String option = sc.nextLine();
+
+                    switch (option) {
+                        case "0":
+                            clearScreen();
+                            System.out.println(
+                                    "\t================================ACTION CANCELLED================================");
+                            adminMenu();
+                            break;
+                        case "1":
+                            System.out.print("\t\t\tEnter your current password: ");
+                            String currentPassword = sc.nextLine();
+
+                            if (!validateCurrentPassword(userId, currentPassword)) {
+                                System.out.println("\t\t\tCurrent password is incorrect. Please try again.");
+                                break; // Loop again
+                            }
+
+                            System.out.print("\t\t\tEnter your new password: ");
+                            String newPassword = sc.nextLine();
+                            System.out.print("\t\t\tConfirm your new password: ");
+                            String confirmPassword = sc.nextLine();
+
+                            if (!newPassword.equals(confirmPassword)) {
+                                System.out.println("\t\t\tPasswords do not match. Please try again.");
+                                break;
+                            }
+
+                            if (updatePasswordInDatabase(userId, newPassword)) {
+                                System.out.println("\t\t\tPassword changed successfully.");
+                                isValid = true;
+                                clearScreen();
+                                System.out.println(
+                                        "\t============================Password changed successfully. Login again===============================\n");
+                                login();
+                            } else {
+                                System.out.println("\t\tFailed to change password. Please try again.");
+                                break;
+                            }
+                            break;
+                        default:
+                            System.out.println(
+                                    "\t================================Invalid Input. Try again.================================");
+                            break;
+                    }
+                } while (!isValid);
+            } else {
+                System.out.println("Access denied. You do not have permission to change the password.");
+            }
+        } catch (Exception e) {
+            System.out.println("==============================AN ERROR OCCURRED.==============================");
+            System.out.println(e.getMessage());
+        }
+    }
+
+    private boolean validateCurrentPassword(int userId, String currentPassword) {
+        boolean isSame = false;
+        try {
+            PreparedStatement checkAccountQuery = conn
+                    .prepareStatement("SELECT * FROM user_info WHERE id = ? AND password = ?");
+            checkAccountQuery.setInt(1, userId);
+            checkAccountQuery.setString(2, currentPassword);
+
+            ResultSet checkAccountSnapshot = checkAccountQuery.executeQuery();
+
+            if (checkAccountSnapshot.next()) {
+                isSame = true;
+            }
+        } catch (Exception e) {
+            System.out.println(e.getMessage());
+        }
+
+        return isSame;
+    }
+
+    private boolean updatePasswordInDatabase(int userId, String newPassword) {
+        boolean isUpdated = false;
+        try {
+            PreparedStatement updatePasswordQuery = conn
+                    .prepareStatement("UPDATE user_info SET password = ? WHERE id = ?");
+            updatePasswordQuery.setString(1, newPassword);
+            updatePasswordQuery.setInt(2, userId);
+
+            int rowsAffected = updatePasswordQuery.executeUpdate();
+            if (rowsAffected > 0) {
+                isUpdated = true;
+            }
+        } catch (SQLException e) {
+            System.out.println("Error updating password: " + e.getMessage());
+        }
+
+        return isUpdated;
+    }
+
+    @Override
+    public void manageStaff() {
+        try {
+            textToAscii.printDisplay("\t\t", "MANAGE ACCOUNTS");
+
+            String query = "SELECT id, username, role FROM user_info WHERE role != 'admin' AND is_fired = 0";
+            PreparedStatement displayUserQuery = conn.prepareStatement(query);
+            ResultSet resultSet = displayUserQuery.executeQuery();
+
+            if (!resultSet.isBeforeFirst()) {
+                System.out.println("\n\t\t=================== NO STAFF FOUND ===================");
+                boolean actionValid = false;
+
+                do {
+                    System.out.println("\n\t\t\t[ 1 ] Add staff");
+                    System.out.println("\t\t\t[ 0 ] Go back");
+                    System.out.print("\t\t\tChoice: ");
+                    String input = sc.nextLine();
+                    char actionChoice = input.charAt(0);
+
+                    switch (actionChoice) {
+                        case '1':
+                            clearScreen();
+                            addStaff();
+                            actionValid = true;
+                            break;
+                        case '0':
+                            System.out.println("Going back...");
+                            actionValid = true;
+                            adminMenu();
+                            break;
+                        default:
+                            clearScreen();
+                            System.out.println(
+                                    "\t\t\t=================== Invalid choice. Please select again. ====================");
+                            break;
+                    }
+                } while (!actionValid);
+                return; // Exit the method if no staff found and action taken
+            }
+
+            System.out.printf("\n\t\t\t%-5s %-20s %-10s%n", "ID", "Username", "Role");
+            System.out.println("\t\t\t------------------------------------------");
+
+            while (resultSet.next()) {
+                int id = resultSet.getInt("id");
+                String username = resultSet.getString("username");
+                String role = resultSet.getString("role");
+                System.out.printf("\t\t\t%-5d %-20s %-10s%n", id, username, role);
+            }
+
+            boolean actionValid = false;
+            do {
+                System.out.println("\n\t\t\tWhat do you want to do?");
+                System.out.println("\n\t\t\t[ 1 ] Manage Staff");
+                System.out.println("\t\t\t[ 2 ] Add Staff");
+                System.out.println("\t\t\t[ 0 ] Go back");
+                System.out.print("\t\t\tChoice: ");
+                String input = sc.nextLine();
+                char actionChoice = input.charAt(0);
+
+                switch (actionChoice) {
+                    case '1':
+                        // Ask for staff ID to manage
+                        int selectedId = -1;
+                        boolean isValid = false;
+
+                        do {
+                            System.out.println("\n\t\t\tType 0 to go back");
+                            System.out.print("\t\t\tEnter staff ID to manage: ");
+                            String choice = sc.nextLine();
+
+                            if (choice.equals("0")) {
+                                System.out.println("Going back...");
+                                clearScreen();
+                                System.out.println(
+                                        "===========================ACTION CANCELLED===========================");
+                                adminMenu();
+                                return;
+                            }
+
+                            try {
+                                selectedId = Integer.parseInt(choice);
+
+                                String checkIdQuery = "SELECT COUNT(*) FROM user_info WHERE id = ? AND id != 1";
+                                PreparedStatement checkIdStatement = conn.prepareStatement(checkIdQuery);
+                                checkIdStatement.setInt(1, selectedId);
+                                ResultSet checkIdResult = checkIdStatement.executeQuery();
+
+                                if (checkIdResult.next() && checkIdResult.getInt(1) > 0) {
+                                    user.setSelectedId(selectedId);
+                                    isValid = true;
+                                } else {
+                                    System.out.println("\t\t\tInvalid staff ID. Please try again.");
+                                }
+                            } catch (NumberFormatException e) {
+                                System.out.println("\t\t\tInvalid input. Please enter a numeric staff ID.");
+                            }
+
+                        } while (!isValid);
+
+                        // Prompt for actions on the selected staff member
+                        boolean manageActionValid = false;
+
+                        do {
+                            System.out.println("\n\t\t\t[ 1 ] Mark staff as fired");
+                            System.out.println("\t\t\t[ 0 ] Go back");
+                            System.out.print("\t\t\tChoice: ");
+                            int manageActionChoice = sc.nextInt();
+                            sc.nextLine(); // Clear the buffer
+
+                            switch (manageActionChoice) {
+                                case 1:
+                                    // Update the selected staff member's is_fired column to 1
+                                    if (updateStaffAsFired(user.getSelectedId())) {
+                                        clearScreen();
+                                        System.out.println(
+                                                "===========================Staff marked as fired successfully.===========================");
+                                        adminMenu();
+                                    } else {
+                                        clearScreen();
+                                        System.out.println(
+                                                "===========================Failed to mark staff as fired.===========================");
+                                        adminMenu();
+                                    }
+                                    manageActionValid = true;
+                                    break;
+                                case 0:
+                                    System.out.println("Going back...");
+                                    manageActionValid = true;
+                                    clearScreen();
+                                    manageStaff();
+                                    break;
+                                default:
+                                    System.out.println("Invalid choice. Please select again.");
+                                    break;
+                            }
+                        } while (!manageActionValid);
+                        actionValid = true; // Exit the main action loop after handling staff
+                        break;
+
+                    case '2':
+                        clearScreen();
+                        addStaff();
+                        actionValid = true;
+                        break;
+
+                    case '0':
+                        System.out.println("Going back...");
+                        actionValid = true;
+                        adminMenu(); // Assuming this method leads back to the admin menu
+                        break;
+
+                    default:
+                        System.out.println("Invalid choice. Please select again.");
+                        break;
+                }
+            } while (!actionValid);
+
+        } catch (SQLException e) {
+            System.out.println("An error occurred: " + e.getMessage());
+        }
+    }
+
+    private boolean updateStaffAsFired(int staffId) {
+        boolean isUpdated = false;
+        try {
+            String updateQuery = "UPDATE user_info SET is_fired = 1 WHERE id = ?";
+            PreparedStatement updateStatement = conn.prepareStatement(updateQuery);
+            updateStatement.setInt(1, staffId);
+            int rowsAffected = updateStatement.executeUpdate();
+            isUpdated = rowsAffected > 0;
+        } catch (SQLException e) {
+            System.out.println("An error occurred while updating staff: " + e.getMessage());
+        }
+        return isUpdated;
+    }
+
+    private void addStaff() {
+        try {
+
+            textToAscii.printDisplay("\t\t\t", "ADD STAFF");
+            // Prompt for username and password
+            System.out.print("\n\t\tEnter Username: ");
+            String username = sc.nextLine();
+
+            System.out.print("\t\tEnter Password: ");
+            String password = sc.nextLine();
+
+            // Insert the new staff member into the database
+            String insertQuery = "INSERT INTO user_info (username, password, role) VALUES (?, ?, 'staff')";
+            PreparedStatement insertStatement = conn.prepareStatement(insertQuery);
+            insertStatement.setString(1, username);
+            insertStatement.setString(2, password);
+
+            int rowsAffected = insertStatement.executeUpdate();
+
+            if (rowsAffected > 0) {
+                clearScreen();
+                System.out.println("\n\t\t=================== STAFF ADDED SUCCESSFULLY ===================");
+                manageStaff();
+            } else {
+                System.out.println("\n\t\t=================== FAILED TO ADD STAFF ===================");
+            }
+
+        } catch (SQLException e) {
+            System.out.println("=============================== AN ERROR OCCURRED ===============================");
+            System.out.println("Error Message: " + e.getMessage());
+        } catch (Exception e) {
+            System.out.println("=============================== AN ERROR OCCURRED ===============================");
+        }
+    }
+
+    @Override
+    public void staffMenu() {
+
+    }
 }
+
+// SELECT COUNT(fd.id) AS missing_count FROM fixed_dairy fd LEFT JOIN products p
+// ON fd.item = p.product_name WHERE p.product_name IS NULL;
+// tong query na to ichcheck kung meron ba sa mga fixed_(products) ang wala sa
+// products table

@@ -2,7 +2,7 @@ package config;
 
 import java.sql.Connection;
 import java.sql.DriverManager;
-
+//Putanginamo //helloworld
 public class DBConfig {
 
     private Connection conn;

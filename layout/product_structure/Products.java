@@ -30,7 +30,7 @@ public class Products {
         System.out.println("\t\t\t\t\tProduct Brand: " + productBrand);
         System.out.println("\t\t\t\t\tProduct Expiry: " + productExpiry);
         System.out.println("\t\t\t\t\tProduct Quantity: " + productQuantity);
-        System.out.println("\t\t\t\t\tCategory ID: " + categId);
+        // System.out.println("\t\t\t\t\tCategory ID: " + categId);
     }
     
     public int getCategId() {

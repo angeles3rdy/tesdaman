@@ -1286,26 +1286,6 @@ public class InventoryMenu implements IInventory {
     }
 
     @Override
-    public void displayNotifications() {
-
-    }
-
-    @Override
-    public void displayProductsToRestock() {
-
-    }
-
-    @Override
-    public void displayExpiredProducts() {
-
-    }
-
-    @Override
-    public void displayLowStockProducts() {
-
-    }
-
-    @Override
     public void notifyAdmin() {
         try {
             PreparedStatement notifyStaff = conn
@@ -1645,6 +1625,26 @@ public class InventoryMenu implements IInventory {
 
     @Override
     public void staffMenu() {
+
+    }
+
+    @Override
+    public void displayNotifications() {
+
+    }
+
+    @Override
+    public void displayProductsToRestock() {
+
+    }
+
+    @Override
+    public void displayExpiredProducts() {
+
+    }
+
+    @Override
+    public void displayLowStockProducts() {
 
     }
 }
